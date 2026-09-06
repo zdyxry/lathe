@@ -637,7 +637,7 @@ func TestMergeOverlayModule_BodyFlags(t *testing.T) {
 	if merged[0].Use != "replace-limits" {
 		t.Fatalf("use = %q", merged[0].Use)
 	}
-	if len(merged[0].Params) != 3 {
+	if len(merged[0].Params) != 4 {
 		t.Fatalf("params = %#v", merged[0].Params)
 	}
 	byName := map[string]runtime.ParamSpec{}
@@ -650,15 +650,15 @@ func TestMergeOverlayModule_BodyFlags(t *testing.T) {
 	if byName["budgetDuration"].Enum[0] != "monthly" {
 		t.Fatalf("budgetDuration = %+v", byName["budgetDuration"])
 	}
-	if _, ok := byName["limits"]; ok {
-		t.Fatalf("nested object property must not produce a typed flag: %#v", byName["limits"])
+	if byName["limits.rpm"].In != runtime.InBody || byName["limits.rpm"].Flag != "limits-rpm" || byName["limits.rpm"].GoType != "int64" {
+		t.Fatalf("limits.rpm = %+v", byName["limits.rpm"])
 	}
-	if got := merged[0].RequestBody.SetOnlyFields; len(got) != 1 || got[0] != "limits" {
+	if got := merged[0].RequestBody.SetOnlyFields; len(got) != 0 {
 		t.Fatalf("set-only fields = %#v", got)
 	}
 }
 
-func TestRenderModule_EmitsSetOnlyBodyFields(t *testing.T) {
+func TestRenderModule_EmitsNestedBodyFlags(t *testing.T) {
 	chdirWithGoMod(t)
 
 	specs := []runtime.CommandSpec{{
@@ -685,15 +685,15 @@ func TestRenderModule_EmitsSetOnlyBodyFields(t *testing.T) {
 		t.Fatalf("RenderModule: %v", err)
 	}
 	flat := strings.Join(strings.Fields(generatedModule(t, "demo")), " ")
-	if !strings.Contains(flat, `SetOnlyFields: []string{"limits"}`) {
-		t.Errorf("output missing set-only fields literal:\n%s", flat)
-	}
 	if !strings.Contains(flat, `Flag: "name"`) {
 		t.Errorf("output missing typed flag for top-level scalar:\n%s", flat)
 	}
+	if !strings.Contains(flat, `Name: "limits.maxBudgetUsd"`) || !strings.Contains(flat, `Flag: "limits-max-budget-usd"`) {
+		t.Errorf("output missing typed flag for nested scalar:\n%s", flat)
+	}
 }
 
-func TestValidateOverlayModule_RejectsNestedBodyFlags(t *testing.T) {
+func TestValidateOverlayModule_AllowsNestedBodyFlags(t *testing.T) {
 	specs := []runtime.CommandSpec{{
 		Group: "keys",
 		Use:   "create",
@@ -710,7 +710,7 @@ func TestValidateOverlayModule_RejectsNestedBodyFlags(t *testing.T) {
 	err := ValidateOverlayModule(specs, overlay.Module{Commands: map[string]overlay.Override{
 		"create": {Body: &overlay.BodyOverride{Flags: true}},
 	}})
-	if err == nil || !strings.Contains(err.Error(), "no body properties support typed flags") {
+	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -751,7 +751,7 @@ func TestMergeOverlayModule_ReturnsBodyFlagExpansionError(t *testing.T) {
 		Use:   "update",
 		RequestBody: &runtime.RequestBody{MediaType: "application/json", Schema: &runtime.SchemaSpec{
 			Type:       "object",
-			Properties: map[string]*runtime.SchemaSpec{"profile": {Type: "object"}},
+			Properties: map[string]*runtime.SchemaSpec{"profile": {Type: "object", AdditionalProperties: &runtime.AdditionalPropertiesSpec{Allowed: true}}},
 		}},
 	}}
 	_, err := MergeOverlayModule(specs, overlay.Module{Commands: map[string]overlay.Override{

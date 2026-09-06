@@ -328,18 +328,19 @@ commands:
 ```
 
 Supported property types are string, number, integer, boolean, nullable scalars,
-and scalar arrays. Nested object properties (including arrays of objects) are
-skipped instead of failing codegen: top-level scalar and scalar-array
-properties still become typed flags, while the skipped fields stay reachable
-through `--set`, `--set-str`, or `--file`. The `--set`/`--set-str` help and the
-catalog `body.set_only_fields` list name those fields. Flattening nested
-fields into typed flags (e.g. `--limits-max-budget-usd`) is a possible future
-extension, not current behavior. A body whose properties are all nested
-objects, plus maps, leftover `oneOf`/`anyOf`/`allOf` after nullable
-flattening, multipart bodies, and GraphQL templates still fail codegen.
-Property descriptions become flag help, and typed scalar or array-item enum
-flags are validated locally. Required properties may be supplied by a typed flag,
-`--file`, `--set`, or `--set-str`; omitting an optional body remains valid.
+and scalar arrays. Nested object scalar leaves also become typed flags by
+joining path segments, for example `where.id` becomes `--where-id` and
+`limits.maxBudgetUsd` becomes `--limits-max-budget-usd`. Unsupported nested
+leaves, maps, arrays of objects, and leftover `oneOf`/`anyOf`/`allOf` after
+nullable flattening stay reachable through `--set`, `--set-str`, or `--file`.
+The `--set`/`--set-str` help and the catalog `body.set_only_fields` list those
+fields as body paths. A body with no supported typed-flag fields, multipart
+bodies, and GraphQL templates still fail codegen. Property descriptions become
+flag help, and typed scalar or array-item enum flags are validated locally.
+Required properties may be supplied by a typed flag, `--file`, `--set`, or
+`--set-str`; omitting an optional body remains valid. Required JSON object
+bodies whose schema declares no required fields may be omitted; Lathe sends an
+empty JSON object.
 `--file` cannot be combined with `--set`, `--set-str`, or body flags on these
 commands. The same field cannot be set by a typed flag and `--set`. Explicit
 `null` still uses `--set field=null`. Upgrading to this capability requires

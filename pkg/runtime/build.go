@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"slices"
 	"strconv"
@@ -144,7 +145,7 @@ func buildCmd(s CommandSpec) *cobra.Command {
 		Use:     s.Use,
 		Aliases: s.Aliases,
 		Short:   s.Short,
-		Long:    s.Long,
+		Long:    commandLong(s),
 		Example: s.Example,
 		Args:    UsageArgs(cobra.NoArgs),
 		PreRunE: func(cmd *cobra.Command, _ []string) error {
@@ -300,9 +301,161 @@ func buildCmd(s CommandSpec) *cobra.Command {
 		cmd.Deprecated = "this command is deprecated"
 	}
 	if s.Security != nil && len(s.Security.Scopes) > 0 {
-		cmd.Long = fmt.Sprintf("%s\n\nRequired scopes: %s", cmd.Short, strings.Join(s.Security.Scopes, ", "))
+		cmd.Long = appendLongSection(cmd.Long, "Required scopes: "+strings.Join(s.Security.Scopes, ", "))
 	}
 	return cmd
+}
+
+func commandLong(s CommandSpec) string {
+	long := strings.TrimSpace(s.Long)
+	if long == "" {
+		long = strings.TrimSpace(s.Short)
+	}
+	return appendLongSection(long, bodyHelpSummary(s))
+}
+
+func appendLongSection(base, section string) string {
+	base = strings.TrimSpace(base)
+	section = strings.TrimSpace(section)
+	switch {
+	case base == "":
+		return section
+	case section == "":
+		return base
+	default:
+		return base + "\n\n" + section
+	}
+}
+
+type bodyHelpField struct {
+	path     string
+	typeName string
+	required bool
+}
+
+const (
+	maxBodyHelpDepth  = 2
+	maxBodyHelpFields = 12
+)
+
+func bodyHelpSummary(s CommandSpec) string {
+	body := s.RequestBody
+	if body == nil || body.Template != "" || body.Schema == nil || !supportsJSONBodyBuilder(body.MediaType) {
+		return ""
+	}
+	schema := bodyHelpSchema(body.Schema)
+	if schema == nil || bodyHelpType(schema) != "object" {
+		return ""
+	}
+
+	state := "optional JSON object"
+	if body.Required {
+		state = "required JSON object"
+		if canDefaultRequiredJSONBodyToEmptyObject(s) {
+			state += "; no fields required, omit body to send {}"
+		}
+	}
+
+	fields := bodyHelpFields(schema)
+	var b strings.Builder
+	b.WriteString("Body:\n  ")
+	b.WriteString(state)
+
+	required := make([]bodyHelpField, 0)
+	common := make([]bodyHelpField, 0)
+	for _, field := range fields {
+		if field.required {
+			required = append(required, field)
+			continue
+		}
+		common = append(common, field)
+	}
+	if len(required) > 0 {
+		writeBodyHelpFieldSection(&b, "Required fields", required, maxBodyHelpFields)
+		writeBodyHelpFieldSection(&b, "Common fields", common, maxBodyHelpFields)
+		return b.String()
+	}
+	writeBodyHelpFieldSection(&b, "Fields", common, maxBodyHelpFields)
+	return b.String()
+}
+
+func writeBodyHelpFieldSection(b *strings.Builder, title string, fields []bodyHelpField, limit int) {
+	if len(fields) == 0 {
+		return
+	}
+	b.WriteString("\n\n  ")
+	b.WriteString(title)
+	b.WriteString(":")
+	for i, field := range fields {
+		if i >= limit {
+			b.WriteString("\n    ...")
+			return
+		}
+		b.WriteString("\n    ")
+		b.WriteString(field.path)
+		b.WriteByte(' ')
+		b.WriteString(field.typeName)
+	}
+}
+
+func bodyHelpFields(schema *SchemaSpec) []bodyHelpField {
+	fields := make([]bodyHelpField, 0)
+	collectBodyHelpFields(&fields, "", schema, 0, true)
+	return fields
+}
+
+func collectBodyHelpFields(out *[]bodyHelpField, prefix string, schema *SchemaSpec, depth int, parentRequired bool) {
+	schema = bodyHelpSchema(schema)
+	if schema == nil || bodyHelpType(schema) != "object" || len(schema.Properties) == 0 {
+		return
+	}
+	required := make(map[string]bool, len(schema.Required))
+	for _, name := range schema.Required {
+		required[name] = true
+	}
+	for _, name := range slices.Sorted(maps.Keys(schema.Properties)) {
+		property := bodyHelpSchema(schema.Properties[name])
+		if property == nil {
+			continue
+		}
+		path := joinBodyPath(prefix, name)
+		fieldRequired := parentRequired && required[name]
+		*out = append(*out, bodyHelpField{
+			path:     path,
+			typeName: bodyHelpType(property),
+			required: fieldRequired,
+		})
+		if depth+1 < maxBodyHelpDepth {
+			collectBodyHelpFields(out, path, property, depth+1, fieldRequired)
+		}
+	}
+}
+
+func bodyHelpSchema(schema *SchemaSpec) *SchemaSpec {
+	for schema != nil && schema.Type == "" && len(schema.Properties) == 0 && schema.Items == nil && len(schema.AllOf) == 1 {
+		schema = schema.AllOf[0]
+	}
+	return schema
+}
+
+func bodyHelpType(schema *SchemaSpec) string {
+	schema = bodyHelpSchema(schema)
+	if schema == nil {
+		return "value"
+	}
+	switch {
+	case schema.Type == "object" || len(schema.Properties) > 0:
+		return "object"
+	case schema.Type == "array":
+		if schema.Items == nil {
+			return "array"
+		}
+		return "array[" + bodyHelpType(schema.Items) + "]"
+	case schema.Type != "":
+		return schema.Type
+	default:
+		return "value"
+	}
 }
 
 func apiErrorWithKnownDetail(s CommandSpec, err error) error {
@@ -782,28 +935,41 @@ func validateRequiredBodyParams(s CommandSpec, body any) error {
 		}
 	}
 	setOnlyRequired := requiredSetOnlyFields(s)
-	if len(required) == 0 && len(setOnlyRequired) == 0 {
+	schemaRequired := requiredBodySchemaFields(s)
+	if len(required) == 0 && len(setOnlyRequired) == 0 && len(schemaRequired) == 0 {
 		return nil
 	}
 	raw, _, err := encodeRequestBody(body)
 	if err != nil {
 		return err
 	}
-	var doc map[string]json.RawMessage
+	var doc any
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return fmt.Errorf("validate request body: %w", err)
 	}
 	for _, p := range required {
-		if _, ok := doc[p.Name]; !ok {
+		if _, ok := getNestedPath(doc, p.Name); !ok {
 			return missingBodyFieldError(p.Name)
 		}
 	}
 	for _, name := range setOnlyRequired {
-		if _, ok := doc[name]; !ok {
+		if _, ok := getNestedPath(doc, name); !ok {
+			return missingBodyFieldError(name)
+		}
+	}
+	for _, name := range schemaRequired {
+		if _, ok := getNestedPath(doc, name); !ok {
 			return missingBodyFieldError(name)
 		}
 	}
 	return nil
+}
+
+func requiredBodySchemaFields(s CommandSpec) []string {
+	if s.RequestBody == nil || s.RequestBody.Schema == nil {
+		return nil
+	}
+	return append([]string(nil), s.RequestBody.Schema.Required...)
 }
 
 func requiredSetOnlyFields(s CommandSpec) []string {

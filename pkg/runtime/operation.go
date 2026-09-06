@@ -290,6 +290,9 @@ func resolveOperationBody(s CommandSpec, input OperationInput, form url.Values, 
 	case input.HasFile:
 		return input.FileBody, nil
 	case s.RequestBody.Required:
+		if canDefaultRequiredJSONBodyToEmptyObject(s) {
+			return []byte(`{}`), nil
+		}
 		if !supportsJSONBodyBuilder(s.RequestBody.MediaType) {
 			return nil, fmt.Errorf("request body media type %s requires --file", s.RequestBody.MediaType)
 		}
@@ -300,6 +303,25 @@ func resolveOperationBody(s CommandSpec, input OperationInput, form url.Values, 
 	default:
 		return nil, nil
 	}
+}
+
+func canDefaultRequiredJSONBodyToEmptyObject(s CommandSpec) bool {
+	if s.RequestBody == nil || !s.RequestBody.Required || s.RequestBody.Template != "" {
+		return false
+	}
+	if !supportsJSONBodyBuilder(s.RequestBody.MediaType) {
+		return false
+	}
+	schema := s.RequestBody.Schema
+	if schema == nil || schema.Type != "object" || len(schema.Required) > 0 {
+		return false
+	}
+	for _, p := range s.Params {
+		if p.In == InBody && p.Required && p.Default == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func requestBodyMediaType(s CommandSpec) string {

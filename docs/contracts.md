@@ -66,10 +66,12 @@ command-name or operation-id matches. Generated Skill module references list
 them per operation. Downstream CLIs must be regenerated to pick up
 `search_terms` (SchemaVersion 15, CatalogSchemaVersion 22).
 
-When JSON body flags are enabled, `body.set_only_fields` lists body fields
-that received no typed flag (nested object properties); they remain settable
-through `--set`, `--set-str`, or `--file` (SchemaVersion 16,
-CatalogSchemaVersion 23).
+When JSON body flags are enabled, nested object scalar leaves may be exposed
+as typed flags using dot-path body parameter names such as `where.id`. The
+generated flag joins the path segments, for example `--where-id`. Fields that
+receive no typed flag are listed in `body.set_only_fields` as body paths; they
+remain settable through `--set`, `--set-str`, or `--file` (SchemaVersion 17,
+CatalogSchemaVersion 24).
 
 Table output may declare per-column `column_alignments` (`left` or `right`).
 Currency `column_formats` default to right alignment unless overridden

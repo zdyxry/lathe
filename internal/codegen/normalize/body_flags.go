@@ -3,8 +3,9 @@ package normalize
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"mime"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/lathe-cli/lathe/pkg/runtime"
@@ -52,18 +53,9 @@ func ExpandJSONBodyFlags(spec runtime.CommandSpec) ([]runtime.ParamSpec, []strin
 	if schema == nil {
 		return nil, nil, fmt.Errorf("request body schema is required")
 	}
-	if err := rejectUnsupportedJSONBodySchema(schema, true); err != nil {
+	if err := rejectUnsupportedJSONBodyRootSchema(schema); err != nil {
 		return nil, nil, err
 	}
-	required := make(map[string]bool, len(schema.Required))
-	for _, name := range schema.Required {
-		required[name] = true
-	}
-	names := make([]string, 0, len(schema.Properties))
-	for name := range schema.Properties {
-		names = append(names, name)
-	}
-	sort.Strings(names)
 	existing := map[string]bool{}
 	for _, param := range spec.Params {
 		existing[param.Flag] = true
@@ -72,47 +64,46 @@ func ExpandJSONBodyFlags(spec runtime.CommandSpec) ([]runtime.ParamSpec, []strin
 			existing[alias] = true
 		}
 	}
-	out := make([]runtime.ParamSpec, 0, len(names))
+	candidates := make([]jsonBodyFlagCandidate, 0)
 	setOnly := make([]string, 0)
+	if err := collectJSONBodyFlagCandidates(&candidates, &setOnly, schema, "", true); err != nil {
+		return nil, nil, err
+	}
+	out := make([]runtime.ParamSpec, 0, len(candidates))
 	seenFlags := map[string]string{}
-	for _, name := range names {
-		property := schema.Properties[name]
-		goType, err := jsonBodyFlagGoType(property)
-		if errors.Is(err, errNestedObjectProperty) {
-			setOnly = append(setOnly, name)
-			continue
-		}
+	for _, candidate := range candidates {
+		goType, err := jsonBodyFlagGoType(candidate.schema)
 		if err != nil {
-			return nil, nil, fmt.Errorf("property %q: %w", name, err)
+			return nil, nil, fmt.Errorf("property %q: %w", candidate.path, err)
 		}
-		flag := camelToKebab(name)
+		flag := jsonBodyFlagName(candidate.path)
 		if flag == "" {
-			return nil, nil, fmt.Errorf("property %q does not produce a flag name", name)
+			return nil, nil, fmt.Errorf("property %q does not produce a flag name", candidate.path)
 		}
 		if reservedBodyFlagNames[flag] {
-			return nil, nil, fmt.Errorf("property %q flag %q conflicts with a reserved flag", name, flag)
+			return nil, nil, fmt.Errorf("property %q flag %q conflicts with a reserved flag", candidate.path, flag)
 		}
-		if existing[flag] || existing[name] {
-			return nil, nil, fmt.Errorf("property %q flag %q conflicts with an existing parameter", name, flag)
+		if existing[flag] || existing[candidate.path] {
+			return nil, nil, fmt.Errorf("property %q flag %q conflicts with an existing parameter", candidate.path, flag)
 		}
 		if prior, ok := seenFlags[flag]; ok {
-			return nil, nil, fmt.Errorf("properties %q and %q produce the same flag %q", prior, name, flag)
+			return nil, nil, fmt.Errorf("properties %q and %q produce the same flag %q", prior, candidate.path, flag)
 		}
-		seenFlags[flag] = name
+		seenFlags[flag] = candidate.path
 		out = append(out, runtime.ParamSpec{
-			Name:     name,
+			Name:     candidate.path,
 			Flag:     flag,
 			In:       runtime.InBody,
 			GoType:   goType,
-			Help:     jsonBodyFlagHelp(name, property, required[name]),
-			Required: required[name],
-			Enum:     append([]string(nil), property.Enum...),
-			ItemEnum: jsonBodyItemEnum(property),
-			Format:   property.Format,
+			Help:     jsonBodyFlagHelp(candidate.path, candidate.schema, candidate.required),
+			Required: candidate.required,
+			Enum:     append([]string(nil), candidate.schema.Enum...),
+			ItemEnum: jsonBodyItemEnum(candidate.schema),
+			Format:   candidate.schema.Format,
 		})
 	}
 	if len(out) == 0 {
-		return nil, nil, fmt.Errorf("no body properties support typed flags (nested object fields: %s); use --set, --set-str, or --file", strings.Join(setOnly, ", "))
+		return nil, nil, fmt.Errorf("no body properties support typed flags (set-only fields: %s); use --set, --set-str, or --file", strings.Join(setOnly, ", "))
 	}
 	if len(setOnly) == 0 {
 		setOnly = nil
@@ -148,7 +139,119 @@ func ValidateJSONBodyFlagParams(spec runtime.CommandSpec) error {
 	return nil
 }
 
+type jsonBodyFlagCandidate struct {
+	path     string
+	schema   *runtime.SchemaSpec
+	required bool
+}
+
+func collectJSONBodyFlagCandidates(out *[]jsonBodyFlagCandidate, setOnly *[]string, schema *runtime.SchemaSpec, prefix string, parentRequired bool) error {
+	schema = jsonBodyFlagSchema(schema)
+	if schema == nil {
+		return nil
+	}
+	if schema.Ref != "" && schema.Type == "" && len(schema.Properties) == 0 && schema.Items == nil {
+		if prefix == "" {
+			return fmt.Errorf("unresolved schema refs are not supported")
+		}
+		*setOnly = append(*setOnly, prefix)
+		return nil
+	}
+	if len(schema.AnyOf) > 0 || len(schema.OneOf) > 0 || len(schema.AllOf) > 0 {
+		if prefix == "" {
+			return fmt.Errorf("oneOf/anyOf/allOf is not supported")
+		}
+		*setOnly = append(*setOnly, prefix)
+		return nil
+	}
+	if schema.AdditionalProperties != nil && (schema.AdditionalProperties.Allowed || schema.AdditionalProperties.Schema != nil) {
+		if prefix == "" {
+			return fmt.Errorf("maps are not supported")
+		}
+		*setOnly = append(*setOnly, prefix)
+		return nil
+	}
+	if schema.Type == "object" || len(schema.Properties) > 0 {
+		if len(schema.Properties) == 0 {
+			if prefix != "" {
+				*setOnly = append(*setOnly, prefix)
+			}
+			return nil
+		}
+		required := make(map[string]bool, len(schema.Required))
+		for _, name := range schema.Required {
+			required[name] = true
+		}
+		for _, name := range slices.Sorted(maps.Keys(schema.Properties)) {
+			path := joinBodyFlagPath(prefix, name)
+			if err := collectJSONBodyFlagCandidates(out, setOnly, schema.Properties[name], path, parentRequired && required[name]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	goType, err := jsonBodyFlagGoType(schema)
+	if err != nil {
+		if prefix == "" {
+			return err
+		}
+		*setOnly = append(*setOnly, prefix)
+		return nil
+	}
+	if goType == "" {
+		return nil
+	}
+	*out = append(*out, jsonBodyFlagCandidate{path: prefix, schema: schema, required: parentRequired})
+	return nil
+}
+
+func rejectUnsupportedJSONBodyRootSchema(schema *runtime.SchemaSpec) error {
+	schema = jsonBodyFlagSchema(schema)
+	if schema == nil {
+		return fmt.Errorf("schema is required")
+	}
+	if schema.Ref != "" && schema.Type == "" && len(schema.Properties) == 0 && schema.Items == nil {
+		return fmt.Errorf("unresolved schema refs are not supported")
+	}
+	if len(schema.AnyOf) > 0 || len(schema.OneOf) > 0 || len(schema.AllOf) > 0 {
+		return fmt.Errorf("oneOf/anyOf/allOf is not supported")
+	}
+	if schema.AdditionalProperties != nil && (schema.AdditionalProperties.Allowed || schema.AdditionalProperties.Schema != nil) {
+		return fmt.Errorf("maps are not supported")
+	}
+	if schema.Type != "object" {
+		return fmt.Errorf("request body must be a JSON object")
+	}
+	if len(schema.Properties) == 0 {
+		return fmt.Errorf("request body object has no properties")
+	}
+	return nil
+}
+
+func jsonBodyFlagSchema(schema *runtime.SchemaSpec) *runtime.SchemaSpec {
+	for schema != nil && schema.Type == "" && len(schema.Properties) == 0 && schema.Items == nil && len(schema.AllOf) == 1 {
+		schema = schema.AllOf[0]
+	}
+	return schema
+}
+
+func joinBodyFlagPath(prefix, name string) string {
+	if prefix == "" {
+		return name
+	}
+	return prefix + "." + name
+}
+
+func jsonBodyFlagName(path string) string {
+	parts := strings.Split(path, ".")
+	for i, part := range parts {
+		parts[i] = camelToKebab(part)
+	}
+	return strings.Join(parts, "-")
+}
+
 func jsonBodyFlagGoType(schema *runtime.SchemaSpec) (string, error) {
+	schema = jsonBodyFlagSchema(schema)
 	if schema == nil {
 		return "", fmt.Errorf("schema is required")
 	}
@@ -182,6 +285,7 @@ func jsonBodyFlagGoType(schema *runtime.SchemaSpec) (string, error) {
 }
 
 func rejectUnsupportedJSONBodySchema(schema *runtime.SchemaSpec, root bool) error {
+	schema = jsonBodyFlagSchema(schema)
 	if schema == nil {
 		return fmt.Errorf("schema is required")
 	}

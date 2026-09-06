@@ -54,7 +54,9 @@ func jsonBodyFromFlags(s CommandSpec, input OperationInput) (map[string]any, map
 		if err != nil {
 			return nil, nil, err
 		}
-		out[p.Name] = v
+		if err := setNestedPath(out, p.Name, v); err != nil {
+			return nil, nil, err
+		}
 		changed[p.Name] = p
 	}
 	return out, changed, nil
@@ -96,11 +98,26 @@ func rejectBodyFlagSetConflict(path string, flagFields map[string]ParamSpec, set
 	if len(segs) == 0 {
 		return nil
 	}
-	param, ok := flagFields[segs[0].key]
-	if !ok {
-		return nil
+	for flagPath, param := range flagFields {
+		if bodyPathsOverlap(path, flagPath) {
+			return fmt.Errorf("body field %q cannot be set by both --%s and %s", param.Name, param.Flag, setFlag)
+		}
 	}
-	return fmt.Errorf("body field %q cannot be set by both --%s and %s", param.Name, param.Flag, setFlag)
+	return nil
+}
+
+func bodyPathsOverlap(a, b string) bool {
+	aSegs := parsePath(a)
+	bSegs := parsePath(b)
+	if len(aSegs) == 0 || len(bSegs) == 0 {
+		return false
+	}
+	for i := range min(len(aSegs), len(bSegs)) {
+		if aSegs[i] != bSegs[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func buildEnvelopeBody(template, mergePath string, vars map[string]any, sets, stringSets []string, fileData []byte, hasFile bool) ([]byte, error) {

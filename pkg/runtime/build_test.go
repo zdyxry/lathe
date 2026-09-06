@@ -1805,6 +1805,105 @@ func TestBuild_SetOnlyBodyFieldsHelpAndCoexistence(t *testing.T) {
 	}
 }
 
+func TestBuild_JSONBodyHelpSummary(t *testing.T) {
+	bindTestManifest(t, "myctl", "MYCTL_HOST")
+
+	specs := []CommandSpec{
+		{
+			Group:   "VM",
+			Use:     "get-vms",
+			Short:   "List virtual machines",
+			Method:  "POST",
+			PathTpl: "/vms",
+			RequestBody: &RequestBody{
+				Required:  true,
+				MediaType: "application/json",
+				Schema: &SchemaSpec{
+					Type: "object",
+					Properties: map[string]*SchemaSpec{
+						"first": {Type: "integer"},
+						"where": {
+							Type: "object",
+							Properties: map[string]*SchemaSpec{
+								"id":   {Type: "string"},
+								"name": {Type: "string"},
+							},
+						},
+					},
+				},
+			},
+			Security: &SecurityHint{Public: true},
+		},
+		{
+			Group:   "VM",
+			Use:     "poweroff-vm",
+			Short:   "Power off virtual machines",
+			Method:  "POST",
+			PathTpl: "/vms/poweroff",
+			RequestBody: &RequestBody{
+				Required:  true,
+				MediaType: "application/json",
+				Schema: &SchemaSpec{
+					Type:     "object",
+					Required: []string{"where"},
+					Properties: map[string]*SchemaSpec{
+						"where": {
+							Type: "object",
+							Properties: map[string]*SchemaSpec{
+								"id":   {Type: "string"},
+								"name": {Type: "string"},
+							},
+						},
+					},
+				},
+			},
+			Security: &SecurityHint{Public: true},
+		},
+	}
+	root := newRootWithModuleGroup()
+	root.PersistentFlags().String("hostname", "", "")
+	root.PersistentFlags().StringP("output", "o", "table", "")
+	mustBuild(t, root, "demo", specs)
+
+	list, _, err := root.Find([]string{"demo", "vm", "get-vms"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	list.SetOut(io.Discard)
+	listHelp := list.Long
+	for _, want := range []string{
+		"Body:",
+		"required JSON object; no fields required, omit body to send {}",
+		"first integer",
+		"where.id string",
+	} {
+		if !strings.Contains(listHelp, want) {
+			t.Fatalf("get-vms help missing %q:\n%s", want, listHelp)
+		}
+	}
+
+	poweroff, _, err := root.Find([]string{"demo", "vm", "poweroff-vm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	poweroffHelp := poweroff.Long
+	for _, want := range []string{
+		"Body:",
+		"required JSON object",
+		"Required fields:",
+		"where object",
+		"Common fields:",
+		"where.id string",
+	} {
+		if !strings.Contains(poweroffHelp, want) {
+			t.Fatalf("poweroff-vm help missing %q:\n%s", want, poweroffHelp)
+		}
+	}
+	if strings.Contains(poweroffHelp, "omit body to send {}") {
+		t.Fatalf("poweroff-vm help incorrectly allows omitted body:\n%s", poweroffHelp)
+	}
+}
+
 func TestBuild_RequiredSetOnlyBodyFieldValidatedLocally(t *testing.T) {
 	bindTestManifest(t, "myctl", "MYCTL_HOST")
 	t.Setenv("MYCTL_CONFIG_DIR", t.TempDir())

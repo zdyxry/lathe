@@ -67,6 +67,59 @@ func TestJSONBodyFromFlags(t *testing.T) {
 	}
 }
 
+func TestJSONBodyFromNestedFlags(t *testing.T) {
+	spec := CommandSpec{
+		Method:  "POST",
+		PathTpl: "/vms/poweroff",
+		Params: []ParamSpec{
+			{Name: "where.id", Flag: "where-id", In: InBody, GoType: "string"},
+			{Name: "where.name", Flag: "where-name", In: InBody, GoType: "string"},
+		},
+		RequestBody: &RequestBody{
+			Required:  true,
+			MediaType: "application/json",
+			Schema:    &SchemaSpec{Type: "object", Required: []string{"where"}},
+		},
+	}
+	id := "vm-1"
+	name := "demo"
+	input := OperationInput{
+		Values: map[string]any{
+			boundParamKey(spec.Params[0]): &id,
+			boundParamKey(spec.Params[1]): &name,
+		},
+		Changed: map[string]bool{
+			boundParamKey(spec.Params[0]): true,
+			boundParamKey(spec.Params[1]): true,
+		},
+	}
+	_, body, _, err := resolveOperationRequest(spec, input, ClientOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _, err := encodeRequestBody(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"where": map[string]any{"id": "vm-1", "name": "demo"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %#v, want %#v", got, want)
+	}
+
+	input.BodySets = []string{"where.id=vm-2"}
+	if _, _, _, err := resolveOperationRequest(spec, input, ClientOptions{}); err == nil || !strings.Contains(err.Error(), "cannot be set by both") {
+		t.Fatalf("error = %v", err)
+	}
+	input.BodySets = []string{"where.local_id=local-1"}
+	if _, _, _, err := resolveOperationRequest(spec, input, ClientOptions{}); err != nil {
+		t.Fatalf("non-overlapping --set must coexist with nested body flags: %v", err)
+	}
+}
+
 func TestJSONBodyFlagsExclusiveWithFileAndSet(t *testing.T) {
 	spec := CommandSpec{
 		Method:  "PATCH",
@@ -111,6 +164,87 @@ func TestJSONBodyFlagsExclusiveWithFileAndSet(t *testing.T) {
 	}
 	if _, ok := got["expiresAt"]; !ok || got["expiresAt"] != nil {
 		t.Fatalf("got %#v", got)
+	}
+}
+
+func TestRequiredJSONBodyDefaultsToEmptyObjectWhenSchemaAllowsIt(t *testing.T) {
+	spec := CommandSpec{
+		Method:  "POST",
+		PathTpl: "/vms",
+		RequestBody: &RequestBody{
+			Required:  true,
+			MediaType: "application/json",
+			Schema: &SchemaSpec{
+				Type: "object",
+				Properties: map[string]*SchemaSpec{
+					"first": {Type: "integer"},
+					"where": {
+						Type: "object",
+						Properties: map[string]*SchemaSpec{
+							"id":   {Type: "string"},
+							"name": {Type: "string"},
+						},
+					},
+				},
+			},
+		},
+	}
+	_, body, _, err := resolveOperationRequest(spec, OperationInput{}, ClientOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _, err := encodeRequestBody(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "{}" {
+		t.Fatalf("body = %s, want {}", raw)
+	}
+}
+
+func TestRequiredJSONBodyStillErrorsWhenSchemaRequiresFields(t *testing.T) {
+	spec := CommandSpec{
+		Method:  "POST",
+		PathTpl: "/vms/poweroff",
+		RequestBody: &RequestBody{
+			Required:  true,
+			MediaType: "application/json",
+			Schema: &SchemaSpec{
+				Type:     "object",
+				Required: []string{"where"},
+				Properties: map[string]*SchemaSpec{
+					"where": {
+						Type: "object",
+						Properties: map[string]*SchemaSpec{
+							"id": {Type: "string"},
+						},
+					},
+				},
+			},
+		},
+	}
+	_, _, _, err := resolveOperationRequest(spec, OperationInput{}, ClientOptions{})
+	if err == nil || !strings.Contains(err.Error(), "request body required") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestRequiredJSONBodyStillErrorsWhenRequiredBodyFlagHasNoValue(t *testing.T) {
+	spec := CommandSpec{
+		Method:  "PATCH",
+		PathTpl: "/keys",
+		Params: []ParamSpec{
+			{Name: "name", Flag: "name", In: InBody, GoType: "string", Required: true},
+		},
+		RequestBody: &RequestBody{
+			Required:  true,
+			MediaType: "application/json",
+			Schema:    &SchemaSpec{Type: "object"},
+		},
+	}
+	_, _, _, err := resolveOperationRequest(spec, OperationInput{}, ClientOptions{})
+	if err == nil || !strings.Contains(err.Error(), "request body required") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

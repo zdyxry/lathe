@@ -96,21 +96,6 @@ func TestExpandJSONBodyFlags_RejectsUnsupported(t *testing.T) {
 		want string
 	}{
 		{
-			name: "only nested properties",
-			spec: jsonBodySpec(&runtime.SchemaSpec{Type: "object", Properties: map[string]*runtime.SchemaSpec{"limits": {Type: "object", Properties: map[string]*runtime.SchemaSpec{"rpm": {Type: "integer"}}}}}),
-			want: "no body properties support typed flags",
-		},
-		{
-			name: "oneof",
-			spec: jsonBodySpec(&runtime.SchemaSpec{Type: "object", Properties: map[string]*runtime.SchemaSpec{"value": {OneOf: []*runtime.SchemaSpec{{Type: "string"}, {Type: "integer"}}}}}),
-			want: "oneOf/anyOf/allOf",
-		},
-		{
-			name: "map",
-			spec: jsonBodySpec(&runtime.SchemaSpec{Type: "object", Properties: map[string]*runtime.SchemaSpec{"labels": {Type: "object", AdditionalProperties: &runtime.AdditionalPropertiesSpec{Allowed: true}}}}),
-			want: "maps",
-		},
-		{
 			name: "graphql",
 			spec: runtime.CommandSpec{RequestBody: &runtime.RequestBody{MediaType: "application/json", Template: `{"query":"q"}`, Schema: &runtime.SchemaSpec{Type: "object", Properties: map[string]*runtime.SchemaSpec{"name": {Type: "string"}}}}},
 			want: "GraphQL",
@@ -131,13 +116,13 @@ func TestExpandJSONBodyFlags_RejectsUnsupported(t *testing.T) {
 	}
 }
 
-func TestExpandJSONBodyFlags_SkipsNestedObjectProperties(t *testing.T) {
+func TestExpandJSONBodyFlags_ExpandsNestedObjectProperties(t *testing.T) {
 	spec := jsonBodySpec(&runtime.SchemaSpec{
 		Type:     "object",
-		Required: []string{"name"},
+		Required: []string{"limits", "name"},
 		Properties: map[string]*runtime.SchemaSpec{
 			"name":   {Type: "string"},
-			"limits": {Type: "object", Properties: map[string]*runtime.SchemaSpec{"maxBudgetUsd": {Type: "number"}}},
+			"limits": {Type: "object", Required: []string{"maxBudgetUsd"}, Properties: map[string]*runtime.SchemaSpec{"maxBudgetUsd": {Type: "number"}}},
 			"admins": {Type: "array", Items: &runtime.SchemaSpec{Type: "object", Properties: map[string]*runtime.SchemaSpec{"id": {Type: "string"}}}},
 		},
 	})
@@ -145,10 +130,38 @@ func TestExpandJSONBodyFlags_SkipsNestedObjectProperties(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].Name != "name" || got[0].Flag != "name" || !got[0].Required {
+	byName := map[string]runtime.ParamSpec{}
+	for _, param := range got {
+		byName[param.Name] = param
+	}
+	if byName["name"].Flag != "name" || !byName["name"].Required {
+		t.Fatalf("name = %#v", byName["name"])
+	}
+	if byName["limits.maxBudgetUsd"].Flag != "limits-max-budget-usd" || byName["limits.maxBudgetUsd"].GoType != "float64" || !byName["limits.maxBudgetUsd"].Required {
+		t.Fatalf("limits.maxBudgetUsd = %#v", byName["limits.maxBudgetUsd"])
+	}
+	if !equalStrings(setOnly, []string{"admins"}) {
+		t.Fatalf("setOnly = %#v", setOnly)
+	}
+}
+
+func TestExpandJSONBodyFlags_UnsupportedNestedLeavesRemainSetOnly(t *testing.T) {
+	spec := jsonBodySpec(&runtime.SchemaSpec{
+		Type: "object",
+		Properties: map[string]*runtime.SchemaSpec{
+			"name":   {Type: "string"},
+			"choice": {OneOf: []*runtime.SchemaSpec{{Type: "string"}, {Type: "integer"}}},
+			"labels": {Type: "object", AdditionalProperties: &runtime.AdditionalPropertiesSpec{Allowed: true}},
+		},
+	})
+	got, setOnly, err := ExpandJSONBodyFlags(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Name != "name" {
 		t.Fatalf("params = %#v", got)
 	}
-	if !equalStrings(setOnly, []string{"admins", "limits"}) {
+	if !equalStrings(setOnly, []string{"choice", "labels"}) {
 		t.Fatalf("setOnly = %#v", setOnly)
 	}
 }
