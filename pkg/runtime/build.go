@@ -434,6 +434,9 @@ func collectBodyHelpFields(out *[]bodyHelpField, prefix string, schema *SchemaSp
 		})
 		if depth+1 < maxBodyHelpDepth {
 			collectBodyHelpFields(out, path, property, depth+1, fieldRequired)
+			if bodyHelpType(property) == "array[object]" {
+				collectBodyHelpFields(out, path+"[0]", property.Items, depth+1, fieldRequired)
+			}
 		}
 	}
 }
@@ -479,7 +482,7 @@ func bodyHelpSetter(path string, schema *SchemaSpec) string {
 		return "--set-str " + path + "[0]=<value>"
 	case "array[integer]", "array[number]", "array[boolean]":
 		return "--set " + path + "[0]=<value>"
-	case "object":
+	case "object", "array[object]":
 		return ""
 	default:
 		return "--set " + path + "=<value>"

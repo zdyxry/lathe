@@ -323,8 +323,10 @@ path: string fields prefer `--set-str path=<value>` so numeric-looking IDs,
 boolean-looking names, and `null` text stay strings; integer, number, and
 boolean fields use `--set path=<value>` so the value becomes the matching JSON
 type. String arrays recommend `--set-str path[0]=<value>`, while numeric or
-boolean arrays recommend `--set path[0]=<value>`. Use `--set path=null` when
-the intended JSON value is null.
+boolean arrays recommend `--set path[0]=<value>`. Arrays of objects are shown
+with first-item field paths such as `data[0].name`, using the item field type
+to choose `--set` or `--set-str`. Use `--set path=null` when the intended JSON
+value is null.
 
 ### JSON Body Flags
 

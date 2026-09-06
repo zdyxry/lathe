@@ -1859,6 +1859,36 @@ func TestBuild_JSONBodyHelpSummary(t *testing.T) {
 			},
 			Security: &SecurityHint{Public: true},
 		},
+		{
+			Group:   "VMSnapshot",
+			Use:     "create-vm-snapshot",
+			Short:   "Create VM snapshots",
+			Method:  "POST",
+			PathTpl: "/vms/snapshots",
+			RequestBody: &RequestBody{
+				Required:  true,
+				MediaType: "application/json",
+				Schema: &SchemaSpec{
+					Type:     "object",
+					Required: []string{"data"},
+					Properties: map[string]*SchemaSpec{
+						"data": {
+							Type: "array",
+							Items: &SchemaSpec{
+								Type:     "object",
+								Required: []string{"name", "vm_id"},
+								Properties: map[string]*SchemaSpec{
+									"consistent_type": {Type: "string"},
+									"name":            {Type: "string"},
+									"vm_id":           {Type: "string"},
+								},
+							},
+						},
+					},
+				},
+			},
+			Security: &SecurityHint{Public: true},
+		},
 	}
 	root := newRootWithModuleGroup()
 	root.PersistentFlags().String("hostname", "", "")
@@ -1901,6 +1931,22 @@ func TestBuild_JSONBodyHelpSummary(t *testing.T) {
 	}
 	if strings.Contains(poweroffHelp, "omit body to send {}") {
 		t.Fatalf("poweroff-vm help incorrectly allows omitted body:\n%s", poweroffHelp)
+	}
+
+	createSnapshot, _, err := root.Find([]string{"demo", "vmsnapshot", "create-vm-snapshot"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshotHelp := createSnapshot.Long
+	for _, want := range []string{
+		"data array[object]",
+		"data[0].name string (--set-str data[0].name=<value>)",
+		"data[0].vm_id string (--set-str data[0].vm_id=<value>)",
+		"data[0].consistent_type string (--set-str data[0].consistent_type=<value>)",
+	} {
+		if !strings.Contains(snapshotHelp, want) {
+			t.Fatalf("create-vm-snapshot help missing %q:\n%s", want, snapshotHelp)
+		}
 	}
 }
 
