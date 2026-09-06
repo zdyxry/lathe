@@ -315,6 +315,17 @@ normal command flags. A field with `format: binary` accepts a local file path;
 the runtime opens it and builds the multipart request. These commands do not use
 the JSON body builder's `--file`, `--set`, or `--set-str` flags.
 
+### JSON Body Input
+
+Generated command help shows a bounded `Body` summary for JSON request bodies.
+Scalar fields include the recommended generic setter form next to the field
+path: string fields prefer `--set-str path=<value>` so numeric-looking IDs,
+boolean-looking names, and `null` text stay strings; integer, number, and
+boolean fields use `--set path=<value>` so the value becomes the matching JSON
+type. String arrays recommend `--set-str path[0]=<value>`, while numeric or
+boolean arrays recommend `--set path[0]=<value>`. Use `--set path=null` when
+the intended JSON value is null.
+
 ### JSON Body Flags
 
 Opt in per command to turn a flat JSON object body into typed flags. Default

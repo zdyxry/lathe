@@ -331,6 +331,7 @@ type bodyHelpField struct {
 	path     string
 	typeName string
 	required bool
+	setter   string
 }
 
 const (
@@ -395,6 +396,11 @@ func writeBodyHelpFieldSection(b *strings.Builder, title string, fields []bodyHe
 		b.WriteString(field.path)
 		b.WriteByte(' ')
 		b.WriteString(field.typeName)
+		if field.setter != "" {
+			b.WriteString(" (")
+			b.WriteString(field.setter)
+			b.WriteByte(')')
+		}
 	}
 }
 
@@ -424,6 +430,7 @@ func collectBodyHelpFields(out *[]bodyHelpField, prefix string, schema *SchemaSp
 			path:     path,
 			typeName: bodyHelpType(property),
 			required: fieldRequired,
+			setter:   bodyHelpSetter(path, property),
 		})
 		if depth+1 < maxBodyHelpDepth {
 			collectBodyHelpFields(out, path, property, depth+1, fieldRequired)
@@ -455,6 +462,27 @@ func bodyHelpType(schema *SchemaSpec) string {
 		return schema.Type
 	default:
 		return "value"
+	}
+}
+
+func bodyHelpSetter(path string, schema *SchemaSpec) string {
+	schema = bodyHelpSchema(schema)
+	if schema == nil {
+		return "--set " + path + "=<value>"
+	}
+	switch bodyHelpType(schema) {
+	case "string":
+		return "--set-str " + path + "=<value>"
+	case "integer", "number", "boolean":
+		return "--set " + path + "=<value>"
+	case "array[string]":
+		return "--set-str " + path + "[0]=<value>"
+	case "array[integer]", "array[number]", "array[boolean]":
+		return "--set " + path + "[0]=<value>"
+	case "object":
+		return ""
+	default:
+		return "--set " + path + "=<value>"
 	}
 }
 

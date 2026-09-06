@@ -1874,8 +1874,8 @@ func TestBuild_JSONBodyHelpSummary(t *testing.T) {
 	for _, want := range []string{
 		"Body:",
 		"required JSON object; no fields required, omit body to send {}",
-		"first integer",
-		"where.id string",
+		"first integer (--set first=<value>)",
+		"where.id string (--set-str where.id=<value>)",
 	} {
 		if !strings.Contains(listHelp, want) {
 			t.Fatalf("get-vms help missing %q:\n%s", want, listHelp)
@@ -1893,7 +1893,7 @@ func TestBuild_JSONBodyHelpSummary(t *testing.T) {
 		"Required fields:",
 		"where object",
 		"Common fields:",
-		"where.id string",
+		"where.id string (--set-str where.id=<value>)",
 	} {
 		if !strings.Contains(poweroffHelp, want) {
 			t.Fatalf("poweroff-vm help missing %q:\n%s", want, poweroffHelp)
