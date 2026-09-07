@@ -62,9 +62,9 @@ Operation entries may carry `search_terms`: overlay-curated synonyms that
 flow from the overlay through the generated `CommandSpec` into the catalog.
 Search indexes them as identifying synonyms weighted like the summary text,
 so a single curated term surfaces the command without outranking exact
-command-name or operation-id matches. Generated Skill module references list
-them per operation. Downstream CLIs must be regenerated to pick up
-`search_terms` (SchemaVersion 15, CatalogSchemaVersion 22).
+command-name or operation-id matches. Generated Skill module or group
+references list them per operation. Downstream CLIs must be regenerated to pick
+up `search_terms` (SchemaVersion 15, CatalogSchemaVersion 22).
 
 When JSON body flags are enabled, nested object scalar leaves may be exposed
 as typed flags using dot-path body parameter names such as `where.id`. The

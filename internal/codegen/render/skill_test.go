@@ -1,6 +1,7 @@
 package render
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -170,6 +171,83 @@ func TestRenderSkillDirectory_GeneratesSkillStructure(t *testing.T) {
 	}
 }
 
+func TestRenderSkillDirectory_SplitsLargeModuleReferenceByGroup(t *testing.T) {
+	dir := t.TempDir()
+	manifest := &config.Manifest{CLI: config.CLIInfo{Name: "acmectl"}}
+	source := &sourceconfig.Source{Name: "users", Backend: sourceconfig.BackendOpenAPI3, OpenAPI3: &sourceconfig.OpenAPI3Config{Files: []string{"openapi.yaml"}}}
+
+	if err := RenderSkillDirectory(filepath.Join(dir, "skills", "acmectl"), manifest, []SkillModule{{
+		Source: source,
+		Specs:  largeSkillSpecs(),
+	}}); err != nil {
+		t.Fatalf("RenderSkillDirectory: %v", err)
+	}
+
+	skill := readFile(t, dir, "skills/acmectl/SKILL.md")
+	if !strings.Contains(skill, "large modules may link to group detail files") {
+		t.Fatalf("SKILL.md missing split reference guidance:\n%s", skill)
+	}
+
+	index := readFile(t, dir, "skills/acmectl/references/modules/users.md")
+	for _, want := range []string{
+		"# Module `users`",
+		"## Command Groups",
+		"acmectl commands show <path...> --json",
+		"[Group00](users/group00.md): 1 command",
+		"[Group20](users/group20.md): 1 command",
+	} {
+		if !strings.Contains(index, want) {
+			t.Fatalf("split module index missing %q\nfull output:\n%s", want, index)
+		}
+	}
+	if strings.Contains(index, "### `acmectl group00 get-group-00`") {
+		t.Fatalf("split module index should not contain command details:\n%s", index)
+	}
+
+	detail := readFile(t, dir, "skills/acmectl/references/modules/users/group00.md")
+	for _, want := range []string{
+		"# Module `users`: Group00",
+		"## Group00",
+		"### `acmectl group00 get-group-00`",
+		"Summary: Get group 00",
+		"HTTP: `GET /groups/00`",
+	} {
+		if !strings.Contains(detail, want) {
+			t.Fatalf("split group detail missing %q\nfull output:\n%s", want, detail)
+		}
+	}
+}
+
+func TestRenderSkillDirectory_SplitModuleReferenceHonorsOmittedGroup(t *testing.T) {
+	dir := t.TempDir()
+	manifest := &config.Manifest{CLI: config.CLIInfo{Name: "acmectl"}}
+	source := &sourceconfig.Source{Name: "users", Backend: sourceconfig.BackendOpenAPI3, OpenAPI3: &sourceconfig.OpenAPI3Config{Files: []string{"openapi.yaml"}}}
+	include := SkillInclude{Files: map[string]SkillFileAction{
+		"references/modules/users/group00.md": SkillFileOmit,
+	}}
+
+	if err := RenderSkillDirectoryWithInclude(filepath.Join(dir, "skills", "acmectl"), manifest, []SkillModule{{
+		Source: source,
+		Specs:  largeSkillSpecs(),
+	}}, include); err != nil {
+		t.Fatalf("RenderSkillDirectoryWithInclude: %v", err)
+	}
+
+	index := readFile(t, dir, "skills/acmectl/references/modules/users.md")
+	if strings.Contains(index, "users/group00.md") || strings.Contains(index, "Group00") {
+		t.Fatalf("split module index should not link omitted group:\n%s", index)
+	}
+	if !strings.Contains(index, "[Group01](users/group01.md): 1 command") {
+		t.Fatalf("split module index should keep non-omitted groups:\n%s", index)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "skills/acmectl/references/modules/users/group00.md")); !os.IsNotExist(err) {
+		t.Fatalf("omitted group detail should not exist, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "skills/acmectl/references/modules/users/group01.md")); err != nil {
+		t.Fatalf("non-omitted group detail should exist: %v", err)
+	}
+}
+
 func TestRenderModuleReference_FormatsExamples(t *testing.T) {
 	manifest := &config.Manifest{CLI: config.CLIInfo{Name: "acmectl"}}
 	module := SkillModule{
@@ -332,6 +410,21 @@ func TestRenderModuleReference_GraphQLSourceSummary(t *testing.T) {
 			t.Fatalf("graphql module reference missing %q\nfull output:\n%s", want, got)
 		}
 	}
+}
+
+func largeSkillSpecs() []runtime.CommandSpec {
+	groupCount := skillModuleReferenceSplitGroupThreshold + 1
+	specs := make([]runtime.CommandSpec, 0, groupCount)
+	for i := range groupCount {
+		specs = append(specs, runtime.CommandSpec{
+			Group:   fmt.Sprintf("Group%02d", i),
+			Use:     fmt.Sprintf("get-group-%02d", i),
+			Short:   fmt.Sprintf("Get group %02d", i),
+			Method:  "GET",
+			PathTpl: fmt.Sprintf("/groups/%02d", i),
+		})
+	}
+	return specs
 }
 
 func TestRenderSkillDirectory_RejectsUnsafeRoot(t *testing.T) {

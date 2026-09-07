@@ -173,6 +173,10 @@ skill:
 - `include` merges repo-local resources into the generated Skill.
 - `bundle: true` embeds the Skill and mounts `<cli> skill install`.
 
+Generated Skill references include one `references/modules/<module>.md` index
+per source module. Small modules keep command details in that file; large
+modules split details by command group under `references/modules/<module>/`.
+
 Object-form `include` supports per-file `append`, `create`, `replace`, and
 `omit` policies. Includes may target `SKILL.md`, `agents/`, `references/`,
 `scripts/`, and `assets/`. Dotfiles, symlinks, traversal, and paths inside
