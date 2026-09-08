@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -303,7 +304,9 @@ func mergeOverlaySpecs(specs []runtime.CommandSpec, mod overlay.Module) ([]runti
 			if err := applyBodyFlags(&merged[i], overrides[i]); err != nil {
 				return nil, fmt.Errorf("command %q body.flags: %w", merged[i].Use, err)
 			}
-			applyCommandOverride(&merged[i], overrides[i])
+			if err := applyCommandOverride(&merged[i], overrides[i], mod.Formats); err != nil {
+				return nil, fmt.Errorf("command %q output: %w", merged[i].Use, err)
+			}
 		}
 	}
 	return merged, nil
@@ -360,6 +363,9 @@ func disambiguateUse(specs []runtime.CommandSpec) {
 }
 
 func ValidateOverlayModule(specs []runtime.CommandSpec, mod overlay.Module) error {
+	if err := validateColumnFormatPresets(mod.Formats); err != nil {
+		return err
+	}
 	legacyUses := legacyOverlayUses(specs)
 	for i, spec := range specs {
 		override, ok := commandOverride(mod, spec, legacyUses[i])
@@ -380,7 +386,7 @@ func ValidateOverlayModule(specs []runtime.CommandSpec, mod overlay.Module) erro
 			if err := validateColumnLabelsOverride(columns, override.Output.ColumnLabels); err != nil {
 				return fmt.Errorf("command %q output: %w", spec.Use, err)
 			}
-			if err := validateColumnFormatsOverride(columns, override.Output.ColumnFormats); err != nil {
+			if err := validateColumnFormatsOverride(columns, override.Output.ColumnFormats, mod.Formats); err != nil {
 				return fmt.Errorf("command %q output: %w", spec.Use, err)
 			}
 			if err := validateColumnAlignmentsOverride(columns, override.Output.ColumnAlignments); err != nil {
@@ -697,7 +703,40 @@ func validateColumnLabelsOverride(columns []string, labels map[string]string) er
 	return nil
 }
 
-func validateColumnFormatsOverride(columns []string, formats map[string]overlay.ColumnFormatOverride) error {
+func validateColumnFormatPresets(formats map[string]overlay.ColumnFormatOverride) error {
+	names := make([]string, 0, len(formats))
+	for name := range formats {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if !validColumnFormatPresetName(name) {
+			return fmt.Errorf("format preset %q must be non-empty, trimmed, and contain only letters, numbers, dashes, or underscores", name)
+		}
+		if _, ok := runtime.ColumnFormatPreset(name); ok {
+			return fmt.Errorf("format preset %q conflicts with a built-in preset", name)
+		}
+		if _, err := resolveNamedColumnFormatPreset(name, formats, map[string]bool{}); err != nil {
+			return fmt.Errorf("format preset %q: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func validColumnFormatPresetName(name string) bool {
+	if name == "" || strings.TrimSpace(name) != name {
+		return false
+	}
+	for _, r := range name {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validateColumnFormatsOverride(columns []string, formats map[string]overlay.ColumnFormatOverride, formatPresets map[string]overlay.ColumnFormatOverride) error {
 	known := make(map[string]bool, len(columns))
 	for _, column := range columns {
 		known[column] = true
@@ -712,23 +751,8 @@ func validateColumnFormatsOverride(columns []string, formats map[string]overlay.
 		if !known[path] {
 			return fmt.Errorf("column format %q does not match a default column", path)
 		}
-		if format.Kind != "currency" {
-			return fmt.Errorf("column format %q kind must be currency", path)
-		}
-		if !validCurrencyCode(format.Currency) {
-			return fmt.Errorf("column format %q currency must be a three-letter uppercase code", path)
-		}
-		if format.SourceScale < 0 || format.SourceScale > 18 {
-			return fmt.Errorf("column format %q source_scale must be between 0 and 18", path)
-		}
-		if format.MinFractionDigits < 0 || format.MinFractionDigits > 18 {
-			return fmt.Errorf("column format %q min_fraction_digits must be between 0 and 18", path)
-		}
-		if format.MaxFractionDigits < format.MinFractionDigits || format.MaxFractionDigits > 18 {
-			return fmt.Errorf("column format %q max_fraction_digits must be between min_fraction_digits and 18", path)
-		}
-		if format.MaxFractionDigits < format.SourceScale {
-			return fmt.Errorf("column format %q max_fraction_digits must be at least source_scale", path)
+		if _, err := resolveColumnFormatOverride(format, formatPresets); err != nil {
+			return fmt.Errorf("column format %q: %w", path, err)
 		}
 	}
 	return nil
@@ -756,16 +780,105 @@ func validateColumnAlignmentsOverride(columns []string, alignments map[string]st
 	return nil
 }
 
-func validCurrencyCode(value string) bool {
-	if len(value) != 3 {
-		return false
-	}
-	for _, r := range value {
-		if r < 'A' || r > 'Z' {
-			return false
+func resolveColumnFormatOverride(format overlay.ColumnFormatOverride, formatPresets map[string]overlay.ColumnFormatOverride) (runtime.ColumnFormat, error) {
+	return resolveColumnFormatOverrideStack(format, formatPresets, map[string]bool{})
+}
+
+func resolveColumnFormatOverrideStack(format overlay.ColumnFormatOverride, formatPresets map[string]overlay.ColumnFormatOverride, resolving map[string]bool) (runtime.ColumnFormat, error) {
+	if format.Preset != "" {
+		if format.Kind != "" {
+			return runtime.ColumnFormat{}, fmt.Errorf("preset and kind cannot both be set")
 		}
+		base, err := resolveNamedColumnFormatPreset(format.Preset, formatPresets, resolving)
+		if err != nil {
+			return runtime.ColumnFormat{}, err
+		}
+		return mergeColumnFormatOverride(base, format)
 	}
-	return true
+	if preset, ok := runtime.ColumnFormatPreset(format.Kind); ok {
+		return mergeColumnFormatOverride(preset, format)
+	}
+	return normalizeColumnFormat(overlayColumnFormat(format))
+}
+
+func resolveNamedColumnFormatPreset(name string, formatPresets map[string]overlay.ColumnFormatOverride, resolving map[string]bool) (runtime.ColumnFormat, error) {
+	if !validColumnFormatPresetName(name) {
+		return runtime.ColumnFormat{}, fmt.Errorf("unknown column format preset %q", name)
+	}
+	if preset, ok := formatPresets[name]; ok {
+		if resolving[name] {
+			return runtime.ColumnFormat{}, fmt.Errorf("column format preset cycle at %q", name)
+		}
+		resolving[name] = true
+		resolved, err := resolveColumnFormatOverrideStack(preset, formatPresets, resolving)
+		delete(resolving, name)
+		return resolved, err
+	}
+	if preset, ok := runtime.ColumnFormatPreset(name); ok {
+		return preset, nil
+	}
+	return runtime.ColumnFormat{}, fmt.Errorf("unknown column format preset %q", name)
+}
+
+func overlayColumnFormat(format overlay.ColumnFormatOverride) runtime.ColumnFormat {
+	out := runtime.ColumnFormat{
+		Kind:              format.Kind,
+		Currency:          format.Currency,
+		Unit:              format.Unit,
+		Units:             slices.Clone(format.Units),
+		Base:              format.Base,
+		SourceScale:       format.SourceScale,
+		Grouping:          format.Grouping,
+		MinFractionDigits: format.MinFractionDigits,
+		MaxFractionDigits: format.MaxFractionDigits,
+	}
+	if format.Precision != nil {
+		out.MaxFractionDigits = *format.Precision
+	}
+	return out
+}
+
+func mergeColumnFormatOverride(base runtime.ColumnFormat, override overlay.ColumnFormatOverride) (runtime.ColumnFormat, error) {
+	if override.Precision != nil && override.MaxFractionDigits != 0 && *override.Precision != override.MaxFractionDigits {
+		return runtime.ColumnFormat{}, fmt.Errorf("precision and max_fraction_digits disagree")
+	}
+	out := base
+	if override.Currency != "" {
+		out.Currency = override.Currency
+	}
+	if override.Unit != "" {
+		out.Unit = override.Unit
+	}
+	if len(override.Units) > 0 {
+		out.Units = slices.Clone(override.Units)
+	}
+	if override.Base != 0 {
+		out.Base = override.Base
+	}
+	if override.SourceScale != 0 {
+		out.SourceScale = override.SourceScale
+	}
+	if override.Grouping {
+		out.Grouping = true
+	}
+	if override.MinFractionDigits != 0 {
+		out.MinFractionDigits = override.MinFractionDigits
+	}
+	if override.MaxFractionDigits != 0 {
+		out.MaxFractionDigits = override.MaxFractionDigits
+	}
+	if override.Precision != nil {
+		out.MaxFractionDigits = *override.Precision
+	}
+	return normalizeColumnFormat(out)
+}
+
+func normalizeColumnFormat(format runtime.ColumnFormat) (runtime.ColumnFormat, error) {
+	normalized, ok := runtime.NormalizeColumnFormat(format)
+	if !ok {
+		return runtime.ColumnFormat{}, fmt.Errorf("invalid column format")
+	}
+	return normalized, nil
 }
 
 func validateStreamingOverride(spec runtime.CommandSpec, stream overlay.StreamingOverride) error {
@@ -920,7 +1033,7 @@ func applyBodyFlags(spec *runtime.CommandSpec, override overlay.Override) error 
 	return nil
 }
 
-func applyCommandOverride(spec *runtime.CommandSpec, override overlay.Override) {
+func applyCommandOverride(spec *runtime.CommandSpec, override overlay.Override, formatPresets map[string]overlay.ColumnFormatOverride) error {
 	if override.Use != "" {
 		spec.Use = override.Use
 	}
@@ -1014,14 +1127,11 @@ func applyCommandOverride(spec *runtime.CommandSpec, override overlay.Override) 
 	if override.Output != nil && len(override.Output.ColumnFormats) > 0 {
 		spec.Output.ColumnFormats = make(map[string]runtime.ColumnFormat, len(override.Output.ColumnFormats))
 		for path, format := range override.Output.ColumnFormats {
-			spec.Output.ColumnFormats[path] = runtime.ColumnFormat{
-				Kind:              format.Kind,
-				Currency:          format.Currency,
-				SourceScale:       format.SourceScale,
-				Grouping:          format.Grouping,
-				MinFractionDigits: format.MinFractionDigits,
-				MaxFractionDigits: format.MaxFractionDigits,
+			resolved, err := resolveColumnFormatOverride(format, formatPresets)
+			if err != nil {
+				return err
 			}
+			spec.Output.ColumnFormats[path] = resolved
 		}
 	}
 	if override.Output != nil && len(override.Output.ColumnAlignments) > 0 {
@@ -1050,6 +1160,7 @@ func applyCommandOverride(spec *runtime.CommandSpec, override overlay.Override) 
 		}
 		spec.Output.Streaming.Policy = policy
 	}
+	return nil
 }
 
 func runtimeCommandExample(example overlay.Example) runtime.CommandExample {
@@ -1298,6 +1409,11 @@ func columnFormatMapLiteral(values map[string]runtime.ColumnFormat) string {
 		fmt.Fprintf(&b, "%q: runtime.ColumnFormat{", key)
 		writeStringField(&b, "Kind", format.Kind)
 		writeStringField(&b, "Currency", format.Currency)
+		writeStringField(&b, "Unit", format.Unit)
+		writeStringSliceField(&b, "Units", format.Units)
+		if format.Base != 0 {
+			fmt.Fprintf(&b, "Base: %d,", format.Base)
+		}
 		if format.SourceScale != 0 {
 			fmt.Fprintf(&b, "SourceScale: %d,", format.SourceScale)
 		}

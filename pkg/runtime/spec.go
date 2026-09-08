@@ -161,12 +161,15 @@ type OutputHints struct {
 }
 
 type ColumnFormat struct {
-	Kind              string `json:"kind"`
-	Currency          string `json:"currency,omitempty"`
-	SourceScale       int    `json:"source_scale,omitempty"`
-	Grouping          bool   `json:"grouping,omitempty"`
-	MinFractionDigits int    `json:"min_fraction_digits,omitempty"`
-	MaxFractionDigits int    `json:"max_fraction_digits,omitempty"`
+	Kind              string   `json:"kind"`
+	Currency          string   `json:"currency,omitempty"`
+	Unit              string   `json:"unit,omitempty"`
+	Units             []string `json:"units,omitempty"`
+	Base              int      `json:"base,omitzero"`
+	SourceScale       int      `json:"source_scale,omitzero"`
+	Grouping          bool     `json:"grouping,omitzero"`
+	MinFractionDigits int      `json:"min_fraction_digits,omitzero"`
+	MaxFractionDigits int      `json:"max_fraction_digits,omitzero"`
 }
 
 type PaginationHint struct {

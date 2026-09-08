@@ -639,6 +639,7 @@ func copyColumnFormats(in map[string]ColumnFormat) map[string]ColumnFormat {
 	}
 	out := make(map[string]ColumnFormat, len(in))
 	for key, value := range in {
+		value.Units = slices.Clone(value.Units)
 		out[key] = value
 	}
 	return out

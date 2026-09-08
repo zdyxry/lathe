@@ -242,6 +242,27 @@ func TestFormatOutput_CurrencyAlignmentOverride(t *testing.T) {
 	}
 }
 
+func TestFormatOutput_TableUsesScaledNumberFormats(t *testing.T) {
+	var buf bytes.Buffer
+	data := []byte(`{"items":[{"memory":2153891663872,"cpu":366163200000,"storage":169413676892160},{"memory":1.14086073107338e+12,"cpu":9.54304000000672e+10,"storage":705899528192}]}`)
+	err := FormatOutput(data, "table", &buf, OutputHints{
+		ListPath:       "items",
+		DefaultColumns: []string{"memory", "cpu", "storage"},
+		ColumnFormats: map[string]ColumnFormat{
+			"memory":  {Kind: "bytes"},
+			"cpu":     {Kind: "hz"},
+			"storage": {Kind: "bytes", Unit: "GiB", Grouping: true, MaxFractionDigits: 1},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "MEMORY    CPU         STORAGE\n1.96 TiB  366.16 GHz  157,778.8 GiB\n1.04 TiB  95.43 GHz   657.4 GiB\n"
+	if buf.String() != want {
+		t.Fatalf("table output = %q, want %q", buf.String(), want)
+	}
+}
+
 func TestFormatOutput_TableWithFormatsDumpsRawOnTrailingData(t *testing.T) {
 	data := []byte(`{"items":[{"amount":1000000}]}{"error":"tail"}`)
 	var buf bytes.Buffer

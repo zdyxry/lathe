@@ -61,12 +61,38 @@ type OutputOverride struct {
 }
 
 type ColumnFormatOverride struct {
-	Kind              string `yaml:"kind"`
-	Currency          string `yaml:"currency"`
-	SourceScale       int    `yaml:"source_scale"`
-	Grouping          bool   `yaml:"grouping"`
-	MinFractionDigits int    `yaml:"min_fraction_digits"`
-	MaxFractionDigits int    `yaml:"max_fraction_digits"`
+	Preset            string   `yaml:"preset"`
+	Kind              string   `yaml:"kind"`
+	Currency          string   `yaml:"currency"`
+	Unit              string   `yaml:"unit"`
+	Units             []string `yaml:"units"`
+	Base              int      `yaml:"base"`
+	Precision         *int     `yaml:"precision"`
+	SourceScale       int      `yaml:"source_scale"`
+	Grouping          bool     `yaml:"grouping"`
+	MinFractionDigits int      `yaml:"min_fraction_digits"`
+	MaxFractionDigits int      `yaml:"max_fraction_digits"`
+}
+
+func (f *ColumnFormatOverride) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		if value.Value == "" || strings.TrimSpace(value.Value) != value.Value {
+			return fmt.Errorf("column format preset must be non-empty and trimmed")
+		}
+		*f = ColumnFormatOverride{Preset: value.Value}
+		return nil
+	case yaml.MappingNode:
+		type rawColumnFormatOverride ColumnFormatOverride
+		var raw rawColumnFormatOverride
+		if err := value.Decode(&raw); err != nil {
+			return err
+		}
+		*f = ColumnFormatOverride(raw)
+		return nil
+	default:
+		return fmt.Errorf("column format must be a preset name or mapping")
+	}
 }
 
 type StreamingOverride struct {
@@ -141,9 +167,10 @@ type GroupOverride struct {
 }
 
 type Module struct {
-	Defaults Defaults                 `yaml:"defaults"`
-	Groups   map[string]GroupOverride `yaml:"groups"`
-	Commands map[string]Override      `yaml:"commands"`
+	Defaults Defaults                        `yaml:"defaults"`
+	Formats  map[string]ColumnFormatOverride `yaml:"formats"`
+	Groups   map[string]GroupOverride        `yaml:"groups"`
+	Commands map[string]Override             `yaml:"commands"`
 }
 
 type Defaults struct {

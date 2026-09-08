@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1043,7 +1044,7 @@ func TestMergeOverlayModule_OutputColumns(t *testing.T) {
 
 	for _, formats := range []map[string]overlay.ColumnFormatOverride{
 		{"unknown": {Kind: "currency", Currency: "USD", MaxFractionDigits: 2}},
-		{"resourceId": {Kind: "number", Currency: "USD", MaxFractionDigits: 2}},
+		{"resourceId": {Kind: "unknown", Currency: "USD", MaxFractionDigits: 2}},
 		{"resourceId": {Kind: "currency", Currency: "usd", MaxFractionDigits: 2}},
 		{"resourceId": {Kind: "currency", Currency: "USD", SourceScale: -1, MaxFractionDigits: 2}},
 		{"resourceId": {Kind: "currency", Currency: "USD", SourceScale: 6, MinFractionDigits: 2, MaxFractionDigits: 5}},
@@ -1073,6 +1074,62 @@ func TestMergeOverlayModule_OutputColumns(t *testing.T) {
 		}}
 		if err := ValidateOverlayModule(specs, bad); err == nil {
 			t.Fatalf("ValidateOverlayModule accepted alignments %#v", alignments)
+		}
+	}
+}
+
+func TestMergeOverlayModule_OutputColumnFormatPresets(t *testing.T) {
+	specs := []runtime.CommandSpec{{
+		Group: "Resources", Use: "list", Method: "GET", PathTpl: "/resources",
+		Output: runtime.OutputHints{ListPath: "items", DefaultColumns: []string{"id", "memory", "cpu", "rate"}},
+	}}
+	precision := 1
+	mod := overlay.Module{
+		Formats: map[string]overlay.ColumnFormatOverride{
+			"throughput": {Kind: "scaled_number", Base: 1000, Units: []string{"B/s", "KB/s", "MB/s", "GB/s"}, Precision: &precision},
+		},
+		Commands: map[string]overlay.Override{
+			"list": {Output: &overlay.OutputOverride{
+				DefaultColumns: []string{"id", "memory", "cpu", "rate"},
+				ColumnFormats: map[string]overlay.ColumnFormatOverride{
+					"memory": {Preset: "bytes"},
+					"cpu":    {Kind: "hz", Unit: "GHz"},
+					"rate":   {Preset: "throughput", Unit: "MB/s"},
+				},
+			}},
+		},
+	}
+	if err := ValidateOverlayModule(specs, mod); err != nil {
+		t.Fatalf("ValidateOverlayModule: %v", err)
+	}
+	merged := mustMergeOverlayModule(t, specs, mod)
+	memory := merged[0].Output.ColumnFormats["memory"]
+	if memory.Kind != "scaled_number" || memory.Base != 1024 || !slices.Contains(memory.Units, "TiB") || memory.MaxFractionDigits != 2 {
+		t.Fatalf("memory format = %#v", memory)
+	}
+	cpu := merged[0].Output.ColumnFormats["cpu"]
+	if cpu.Kind != "scaled_number" || cpu.Base != 1000 || cpu.Unit != "GHz" || !slices.Contains(cpu.Units, "MHz") {
+		t.Fatalf("cpu format = %#v", cpu)
+	}
+	rate := merged[0].Output.ColumnFormats["rate"]
+	if rate.Kind != "scaled_number" || rate.Base != 1000 || rate.Unit != "MB/s" || rate.MaxFractionDigits != 1 {
+		t.Fatalf("rate format = %#v", rate)
+	}
+}
+
+func TestColumnFormatMapLiteral_IncludesScaledNumberFields(t *testing.T) {
+	got := columnFormatMapLiteral(map[string]runtime.ColumnFormat{
+		"memory": {Kind: "scaled_number", Unit: "GiB", Units: []string{"B", "KiB", "MiB", "GiB"}, Base: 1024, MaxFractionDigits: 2},
+	})
+	for _, want := range []string{
+		`Kind: "scaled_number"`,
+		`Unit: "GiB"`,
+		`Units: []string{"B","KiB","MiB","GiB",}`,
+		`Base: 1024`,
+		`MaxFractionDigits: 2`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("literal missing %q: %s", want, got)
 		}
 	}
 }

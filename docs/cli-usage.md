@@ -393,14 +393,26 @@ Override the generated table columns for one command when schema-derived
 columns do not surface the operator-facing identity or status fields:
 
 ```yaml
+formats:
+  throughput:
+    kind: scaled_number
+    base: 1000
+    units: [B/s, KB/s, MB/s, GB/s]
+    precision: 1
+
 commands:
   list-resources:
     output:
-      default_columns: [resourceId, displayName, status, spendMicro, cpuMillis]
+      default_columns: [resourceId, displayName, status, spendMicro, memoryBytes, cpuHz, transferRate]
       column_labels:
         resourceId: Resource ID
         displayName: Name
       column_formats:
+        memoryBytes: bytes
+        cpuHz: hz
+        transferRate:
+          preset: throughput
+          unit: MB/s
         spendMicro:
           kind: currency
           currency: USD
@@ -409,14 +421,26 @@ commands:
           min_fraction_digits: 2
           max_fraction_digits: 6
       column_alignments:
-        cpuMillis: right
+        spendMicro: right
 ```
 
 The paths are ordered, dot-separated JSON fields. The override is compiled
 into the generated command and affects table output only; JSON, YAML, and raw
 responses remain unchanged. `column_labels` changes only the displayed header;
 it does not transform values. Unlabeled columns retain the default uppercase
-header. `column_formats` transforms table values only. Currency formats treat
+header. `column_formats` transforms table values only. A column format can be
+a built-in preset name (`bytes`, `decimal_bytes`, `hz`, or `number`), a
+top-level custom `formats` preset reference, or a full mapping.
+
+`scaled_number` formats choose the largest unit whose scaled absolute value is
+at least 1 by default. Built-in `bytes` uses IEC units (`B`, `KiB`, `MiB`,
+`GiB`, `TiB`, `PiB`, `EiB`) with base 1024. Built-in `decimal_bytes` uses
+base-1000 byte units (`B`, `KB`, `MB`, `GB`, `TB`, `PB`, `EB`). Built-in `hz`
+uses base-1000 frequency units (`Hz`, `kHz`, `MHz`, `GHz`, `THz`, `PHz`,
+`EHz`). Set `unit` to force a specific unit from the format's unit list. Set
+`precision` or `max_fraction_digits` to control fractional digits.
+
+Currency formats treat
 the source as a fixed-point integer, move the decimal point left by
 `source_scale`, and retain every non-zero fractional digit through
 `max_fraction_digits`. The maximum must be at least the source scale, so

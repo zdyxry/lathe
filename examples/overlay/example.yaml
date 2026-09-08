@@ -17,14 +17,26 @@
 # Leave the file empty ({} / no "commands:" key) if you do not want to override
 # anything; the generated layer passes through verbatim.
 
+formats:
+  throughput:
+    kind: scaled_number
+    base: 1000
+    units: [B/s, KB/s, MB/s, GB/s]
+    precision: 1
+
 commands:
   list-resources:
     output:
-      default_columns: [resourceId, displayName, status, spendMicro]
+      default_columns: [resourceId, displayName, status, spendMicro, memoryBytes, cpuHz, transferRate]
       column_labels:
         resourceId: Resource ID
         displayName: Name
       column_formats:
+        memoryBytes: bytes
+        cpuHz: hz
+        transferRate:
+          preset: throughput
+          unit: MB/s
         spendMicro:
           kind: currency
           currency: USD

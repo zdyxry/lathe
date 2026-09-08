@@ -252,6 +252,44 @@ commands:
 	}
 }
 
+func TestLoadDir_ParsesColumnFormatPresets(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "tower.yaml"), `formats:
+  throughput:
+    kind: scaled_number
+    base: 1000
+    units: [B/s, KB/s, MB/s, GB/s]
+    precision: 1
+commands:
+  get-clusters:
+    output:
+      default_columns: [id, memory, rate]
+      column_formats:
+        memory: bytes
+        rate:
+          preset: throughput
+          unit: MB/s
+`)
+
+	got, err := LoadDir(dir)
+	if err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+	mod := got["tower"]
+	precision := mod.Formats["throughput"].Precision
+	if precision == nil || *precision != 1 {
+		t.Fatalf("format precision = %v, want 1", precision)
+	}
+	memory := mod.Commands["get-clusters"].Output.ColumnFormats["memory"]
+	if memory.Preset != "bytes" {
+		t.Fatalf("memory format = %#v, want bytes preset", memory)
+	}
+	rate := mod.Commands["get-clusters"].Output.ColumnFormats["rate"]
+	if rate.Preset != "throughput" || rate.Unit != "MB/s" {
+		t.Fatalf("rate format = %#v", rate)
+	}
+}
+
 func writeFile(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
